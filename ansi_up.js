@@ -12,6 +12,7 @@ var PacketKind;
     PacketKind[PacketKind["Unknown"] = 4] = "Unknown";
     PacketKind[PacketKind["SGR"] = 5] = "SGR";
     PacketKind[PacketKind["OSCURL"] = 6] = "OSCURL";
+    PacketKind[PacketKind["OSCURLEND"] = 7] = "OSCURLEND";
 })(PacketKind || (PacketKind = {}));
 export class AnsiUp {
     constructor() {
@@ -125,8 +126,7 @@ export class AnsiUp {
     get_next_packet() {
         var pkt = {
             kind: PacketKind.EOS,
-            text: '',
-            url: ''
+            text: ''
         };
         var len = this._buffer.length;
         if (len == 0)
@@ -209,21 +209,8 @@ export class AnsiUp {
                         return pkt;
                     }
                 }
-                {
-                    let match = this._osc_st.exec(this._buffer);
-                    if (match === null) {
-                        pkt.kind = PacketKind.Incomplete;
-                        return pkt;
-                    }
-                    if (match[3]) {
-                        pkt.kind = PacketKind.ESC;
-                        pkt.text = this._buffer.slice(0, 1);
-                        this._buffer = this._buffer.slice(1);
-                        return pkt;
-                    }
-                }
                 if (!this._osc_regex) {
-                    this._osc_regex = rgx(templateObject_3 || (templateObject_3 = __makeTemplateObject(["\n                        ^                           # beginning of line\n                                                    #\n                        \u001B]8;                    # OSC Hyperlink\n                        [ -:<-~]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([!-~]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\u001B\\)                  # ESC                           |                           # alternate\n                          (?:\u0007)                    # BEL (what xterm did)\n                        )\n                        ([ -~]+)              # TEXT capture\n                        \u001B]8;;                   # OSC Hyperlink End\n                        (?:                         # ST\n                          (?:\u001B\\)                  # ESC                           |                           # alternate\n                          (?:\u0007)                    # BEL (what xterm did)\n                        )\n                    "], ["\n                        ^                           # beginning of line\n                                                    #\n                        \\x1b\\]8;                    # OSC Hyperlink\n                        [\\x20-\\x3a\\x3c-\\x7e]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([\\x21-\\x7e]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\\x1b\\\\)                  # ESC \\\n                          |                           # alternate\n                          (?:\\x07)                    # BEL (what xterm did)\n                        )\n                        ([\\x20-\\x7e]+)              # TEXT capture\n                        \\x1b\\]8;;                   # OSC Hyperlink End\n                        (?:                         # ST\n                          (?:\\x1b\\\\)                  # ESC \\\n                          |                           # alternate\n                          (?:\\x07)                    # BEL (what xterm did)\n                        )\n                    "])));
+                    this._osc_regex = rgx(templateObject_3 || (templateObject_3 = __makeTemplateObject(["\n                        ^                           # beginning of line\n                                                    #\n                        \u001B]8;                    # OSC Hyperlink\n                        [ -:<-~]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([!-~]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\u001B\\)                  # ESC                           |                           # alternate\n                          (?:\u0007)                    # BEL (what xterm did)\n                        )\n                    "], ["\n                        ^                           # beginning of line\n                                                    #\n                        \\x1b\\]8;                    # OSC Hyperlink\n                        [\\x20-\\x3a\\x3c-\\x7e]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([\\x21-\\x7e]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\\x1b\\\\)                  # ESC \\\n                          |                           # alternate\n                          (?:\\x07)                    # BEL (what xterm did)\n                        )\n                    "])));
                 }
                 let match = this._buffer.match(this._osc_regex);
                 if (match === null) {
@@ -232,9 +219,8 @@ export class AnsiUp {
                     this._buffer = this._buffer.slice(1);
                     return pkt;
                 }
-                pkt.kind = PacketKind.OSCURL;
-                pkt.url = match[1];
-                pkt.text = match[2];
+                pkt.kind = match[1] ? PacketKind.OSCURL : PacketKind.OSCURLEND;
+                pkt.text = match[1];
                 var rpos = match[0].length;
                 this._buffer = this._buffer.slice(rpos);
                 return pkt;
@@ -251,19 +237,21 @@ export class AnsiUp {
         var blocks = [];
         while (true) {
             var packet = this.get_next_packet();
-            if ((packet.kind == PacketKind.EOS)
-                || (packet.kind == PacketKind.Incomplete))
+            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete)
                 break;
-            if ((packet.kind == PacketKind.ESC)
-                || (packet.kind == PacketKind.Unknown))
+            if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown)
                 continue;
-            if (packet.kind == PacketKind.Text)
+            if (packet.kind === PacketKind.Text) {
                 blocks.push(this.transform_to_html(this.with_state(packet)));
-            else if (packet.kind == PacketKind.SGR)
+            }
+            else if (packet.kind === PacketKind.SGR) {
                 this.process_ansi(packet);
-            else if (packet.kind == PacketKind.OSCURL)
-                blocks.push(this.process_hyperlink(packet));
+            }
+            else if (packet.kind === PacketKind.OSCURL || packet.kind === PacketKind.OSCURLEND) {
+                blocks.push(this.hyperlink_to_html(packet));
+            }
         }
+        blocks.push(this.hyperlink_to_html({ kind: PacketKind.OSCURLEND, text: '' }));
         return blocks.join("");
     }
     with_state(pkt) {
@@ -406,13 +394,22 @@ export class AnsiUp {
         return `<span${style_string}${class_string}>${txt}</span>`;
     }
     ;
-    process_hyperlink(pkt) {
-        let parts = pkt.url.split(':');
-        if (parts.length < 1)
-            return '';
-        if (!this._url_allowlist[parts[0]])
-            return '';
-        let result = `<a href="${this.escape_txt_for_html(pkt.url)}">${this.escape_txt_for_html(pkt.text)}</a>`;
+    hyperlink_to_html(pkt) {
+        let result = '';
+        if (this.url)
+            result += '</a>';
+        if (pkt.kind === PacketKind.OSCURL) {
+            let parts = pkt.text.split(':');
+            if (parts.length < 1)
+                return '';
+            if (!this._url_allowlist[parts[0]])
+                return '';
+            result += `<a href="${this.escape_txt_for_html(pkt.text)}">`;
+            this.url = true;
+        }
+        else if (pkt.kind === PacketKind.OSCURLEND) {
+            this.url = false;
+        }
         return result;
     }
 }

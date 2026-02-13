@@ -38,13 +38,13 @@ enum PacketKind {
     ESC,                // A single ESC char - random
     Unknown,            // A valid CSI but not an SGR code
     SGR,                // Select Graphic Rendition
-    OSCURL,             // Operating System Command
+    OSCURL,             // Operating System Command URL
+    OSCURLEND,          // Operating System Command URL end
 }
 
 interface TextPacket {
     kind:PacketKind;
     text:string;
-     url:string;
 }
 
 //
@@ -70,6 +70,7 @@ export class AnsiUp
     private faint:boolean;
     private italic: boolean;
     private underline:boolean;
+    private url:boolean;
     private _use_classes:boolean;
 
     private _csi_regex:RegExp;
@@ -233,8 +234,7 @@ export class AnsiUp
         var pkt =
             {
                 kind: PacketKind.EOS,
-                text: '',
-                 url: ''
+                text: ''
             } ;
 
         var len = this._buffer.length;
@@ -466,33 +466,7 @@ export class AnsiUp
                     }
                 }
 
-
-
-                // OK - we might have the prefix and URI
-                // Lets start our search for the next ST
-                // past this index
-
-                {
-                    let match = this._osc_st.exec( this._buffer );
-
-                    if (match === null)
-                    {
-                        pkt.kind = PacketKind.Incomplete;
-                        return pkt;
-                    }
-
-                    // If an illegal character was found, bail on the match
-                    if (match[3])
-                    {
-                        // Illegal sequence, just remove the ESC
-                        pkt.kind = PacketKind.ESC;
-                        pkt.text = this._buffer.slice(0, 1);
-                        this._buffer = this._buffer.slice(1);
-                        return pkt;
-                    }
-                }
-
-                // OK, at this point we should have a FULL match!
+                // OK, at this point we should have a match!
                 //
                 // Lets try to match that now
 
@@ -505,13 +479,6 @@ export class AnsiUp
                         [\x20-\x3a\x3c-\x7e]*       # params (excluding ;)
                         ;                           # end of params
                         ([\x21-\x7e]{0,512})        # URL capture
-                        (?:                         # ST
-                          (?:\x1b\\)                  # ESC \
-                          |                           # alternate
-                          (?:\x07)                    # BEL (what xterm did)
-                        )
-                        ([\x20-\x7e]+)              # TEXT capture
-                        \x1b\]8;;                   # OSC Hyperlink End
                         (?:                         # ST
                           (?:\x1b\\)                  # ESC \
                           |                           # alternate
@@ -534,12 +501,10 @@ export class AnsiUp
                 // match is an array
                 // 0 - total match
                 // 1 - URL
-                // 2 - Text
 
-                // If a valid SGR
-                pkt.kind = PacketKind.OSCURL;
-                pkt.url  = match[1];
-                pkt.text = match[2];
+                // If a valid OSC URL
+                pkt.kind = match[1] ? PacketKind.OSCURL : PacketKind.OSCURLEND;
+                pkt.text = match[1];
 
                 var rpos = match[0].length;
                 this._buffer = this._buffer.slice(rpos);
@@ -570,24 +535,23 @@ export class AnsiUp
         {
             var packet = this.get_next_packet();
 
-            if (    (packet.kind == PacketKind.EOS)
-                 || (packet.kind == PacketKind.Incomplete)  )
-                break;
+            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) break;
 
             //Drop single ESC or Unknown CSI
-            if (    (packet.kind == PacketKind.ESC)
-                 || (packet.kind == PacketKind.Unknown)  )
-                continue;
+            if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown) continue;
 
-            if (packet.kind == PacketKind.Text)
-                blocks.push( this.transform_to_html(this.with_state(packet)) );
-            else
-            if (packet.kind == PacketKind.SGR)
+            if (packet.kind === PacketKind.Text) {
+                blocks.push(this.transform_to_html(this.with_state(packet)));
+            } else
+            if (packet.kind === PacketKind.SGR) {
                 this.process_ansi(packet);
-            else
-            if (packet.kind == PacketKind.OSCURL)
-                blocks.push( this.process_hyperlink(packet) );
+            } else
+            if (packet.kind === PacketKind.OSCURL || packet.kind === PacketKind.OSCURLEND) {
+                blocks.push(this.hyperlink_to_html(packet));
+            }
         }
+
+        blocks.push(this.hyperlink_to_html({ kind: PacketKind.OSCURLEND, text: ''})); // Close any open URL at the end
 
         return blocks.join("");
     }
@@ -739,17 +703,28 @@ export class AnsiUp
         return `<span${style_string}${class_string}>${txt}</span>`;
     };
 
-    private process_hyperlink(pkt:TextPacket):string
+    private hyperlink_to_html(pkt:TextPacket):string
     {
-        // Check URL scheme
-        let parts = pkt.url.split(':');
-        if (parts.length < 1)
-            return '';
+        let result = '';
 
-        if (! this._url_allowlist[parts[0]])
-            return '';
+        // Always close an existing URL if it has been opened
+        if (this.url) result += '</a>';
 
-        let result = `<a href="${this.escape_txt_for_html(pkt.url)}">${this.escape_txt_for_html(pkt.text)}</a>`;
+        if (pkt.kind === PacketKind.OSCURL) {
+            // Check URL scheme
+            let parts = pkt.text.split(':');
+            if (parts.length < 1)
+                return '';
+
+            if (!this._url_allowlist[parts[0]])
+                return '';
+
+            result += `<a href="${this.escape_txt_for_html(pkt.text)}">`
+            this.url = true;
+        } else if (pkt.kind === PacketKind.OSCURLEND) {
+            this.url = false;
+        }
+
         return result;
     }
 }

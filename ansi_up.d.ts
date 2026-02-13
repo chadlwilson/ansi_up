@@ -8,6 +8,7 @@ export declare class AnsiUp {
     private faint;
     private italic;
     private underline;
+    private url;
     private _use_classes;
     private _csi_regex;
     private _osc_st;
@@ -42,5 +43,5 @@ export declare class AnsiUp {
     private with_state;
     private process_ansi;
     private transform_to_html;
-    private process_hyperlink;
+    private hyperlink_to_html;
 }
