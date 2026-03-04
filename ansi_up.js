@@ -245,8 +245,6 @@ export class AnsiUp {
             const packet = this.get_next_packet();
             if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
                 this.flush_text(pendingText, stack, rootNodes);
-                stack.length = 0;
-                this.url = false;
                 break;
             }
             if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown)
@@ -266,7 +264,6 @@ export class AnsiUp {
                 let parts = packet.text.split(':');
                 if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
                     stack.push({ type: 'url', url: packet.text, children: [] });
-                    this.url = true;
                 }
             }
             else if (packet.kind === PacketKind.OSCURLEND) {
@@ -275,33 +272,34 @@ export class AnsiUp {
                 this.close_url_frame(stack, rootNodes);
             }
         }
+        this.close_url_frame(stack, rootNodes);
         return rootNodes;
     }
-    flush_text(pendingText, stack, rootNodes) {
+    flush_text(pendingText, render_ctx_stack, rootNodes) {
         if (pendingText.length === 0)
             return;
         let node = { type: 'text', text: pendingText };
-        const styleFrame = stack.find(f => f.type === 'style');
-        if (styleFrame && styleFrame.type === 'style') {
+        const styleFrame = render_ctx_stack.find(f => f.type === 'style');
+        if (styleFrame) {
             node = {
                 type: 'styled',
                 attrs: styleFrame.attrs,
                 children: [node]
             };
         }
-        const urlFrame = stack.find(f => f.type === 'url');
-        if (urlFrame && urlFrame.type === 'url') {
+        const urlFrame = render_ctx_stack.find(f => f.type === 'url');
+        if (urlFrame) {
             urlFrame.children.push(node);
         }
         else {
             rootNodes.push(node);
         }
     }
-    update_style_stack(stack) {
-        const filtered = stack.filter(f => f.type !== 'style');
-        stack.splice(0, stack.length, ...filtered);
+    update_style_stack(render_ctx_stack) {
+        const filtered = render_ctx_stack.filter(f => f.type !== 'style');
+        render_ctx_stack.splice(0, render_ctx_stack.length, ...filtered);
         if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
-            stack.push({
+            render_ctx_stack.push({
                 type: 'style',
                 attrs: {
                     bold: this.bold,
@@ -315,21 +313,18 @@ export class AnsiUp {
             });
         }
     }
-    close_url_frame(stack, rootNodes) {
-        const urlIndex = stack.findIndex(f => f.type === 'url');
+    close_url_frame(render_ctx_stack, rootNodes) {
+        const urlIndex = render_ctx_stack.findIndex(f => f.type === 'url');
         if (urlIndex !== -1) {
-            const urlFrame = stack[urlIndex];
-            if (urlFrame.type === 'url') {
-                const linkNode = {
-                    type: 'link',
-                    url: urlFrame.url,
-                    children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
-                };
-                rootNodes.push(linkNode);
-                stack.splice(urlIndex, 1);
-            }
+            const urlFrame = render_ctx_stack[urlIndex];
+            const linkNode = {
+                type: 'link',
+                url: urlFrame.url,
+                children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
+            };
+            rootNodes.push(linkNode);
+            render_ctx_stack.splice(urlIndex, 1);
         }
-        this.url = false;
     }
     render_nodes_to_html(nodes) {
         return nodes.map(node => this.render_node_to_html(node)).join('');
@@ -339,62 +334,12 @@ export class AnsiUp {
             return this.escape_txt_for_html(node.text);
         }
         else if (node.type === 'styled') {
-            return this.render_styled_node(node);
+            return this.styled_node_to_html(node);
         }
         else if (node.type === 'link') {
-            const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
-            return `<a href="${this.escape_txt_for_html(node.url)}">${innerHtml}</a>`;
+            return this.hyperlink_to_html(node);
         }
         return '';
-    }
-    render_styled_node(node) {
-        const fragment = node.attrs;
-        const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
-        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline &&
-            fragment.fg === null && fragment.bg === null) {
-            return innerHtml;
-        }
-        let styles = [];
-        let classes = [];
-        if (fragment.bold)
-            styles.push(this._boldStyle);
-        if (fragment.faint)
-            styles.push(this._faintStyle);
-        if (fragment.italic)
-            styles.push(this._italicStyle);
-        if (fragment.underline)
-            styles.push(this._underlineStyle);
-        if (!this._use_classes) {
-            if (fragment.fg)
-                styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
-            if (fragment.bg)
-                styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
-        }
-        else {
-            if (fragment.fg) {
-                if (fragment.fg.class_name !== 'truecolor') {
-                    classes.push(`${fragment.fg.class_name}-fg`);
-                }
-                else {
-                    styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
-                }
-            }
-            if (fragment.bg) {
-                if (fragment.bg.class_name !== 'truecolor') {
-                    classes.push(`${fragment.bg.class_name}-bg`);
-                }
-                else {
-                    styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
-                }
-            }
-        }
-        let class_string = '';
-        let style_string = '';
-        if (classes.length)
-            class_string = ` class="${classes.join(' ')}"`;
-        if (styles.length)
-            style_string = ` style="${styles.join(';')}"`;
-        return `<span${style_string}${class_string}>${innerHtml}</span>`;
     }
     process_ansi(pkt) {
         let sgr_cmds = pkt.text.split(';');
@@ -480,6 +425,59 @@ export class AnsiUp {
                 }
             }
         }
+    }
+    styled_node_to_html(node) {
+        const fragment = node.attrs;
+        const innerHtml = this.render_nodes_to_html(node.children);
+        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline && fragment.fg === null && fragment.bg === null) {
+            return innerHtml;
+        }
+        let styles = [];
+        let classes = [];
+        let fg = fragment.fg;
+        let bg = fragment.bg;
+        if (fragment.bold)
+            styles.push(this._boldStyle);
+        if (fragment.faint)
+            styles.push(this._faintStyle);
+        if (fragment.italic)
+            styles.push(this._italicStyle);
+        if (fragment.underline)
+            styles.push(this._underlineStyle);
+        if (!this._use_classes) {
+            if (fg)
+                styles.push(`color:rgb(${fg.rgb.join(',')})`);
+            if (bg)
+                styles.push(`background-color:rgb(${bg.rgb.join(',')})`);
+        }
+        else {
+            if (fg) {
+                if (fg.class_name !== 'truecolor') {
+                    classes.push(`${fg.class_name}-fg`);
+                }
+                else {
+                    styles.push(`color:rgb(${fg.rgb.join(',')})`);
+                }
+            }
+            if (bg) {
+                if (bg.class_name !== 'truecolor') {
+                    classes.push(`${bg.class_name}-bg`);
+                }
+                else {
+                    styles.push(`background-color:rgb(${bg.rgb.join(',')})`);
+                }
+            }
+        }
+        let class_string = '';
+        let style_string = '';
+        if (classes.length)
+            class_string = ` class="${classes.join(' ')}"`;
+        if (styles.length)
+            style_string = ` style="${styles.join(';')}"`;
+        return `<span${style_string}${class_string}>${innerHtml}</span>`;
+    }
+    hyperlink_to_html(node) {
+        return `<a href="${this.escape_txt_for_html(node.url)}">${this.render_nodes_to_html(node.children)}</a>`;
     }
 }
 function rgx(tmplObj, ...subst) {
