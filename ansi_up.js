@@ -233,29 +233,169 @@ export class AnsiUp {
         }
     }
     ansi_to_html(txt) {
+        const nodes = this.ansi_to_structured(txt);
+        return this.render_nodes_to_html(nodes);
+    }
+    ansi_to_structured(txt) {
         this.append_buffer(txt);
-        var blocks = [];
+        const rootNodes = [];
+        const stack = [];
+        let pendingText = '';
+        const flushText = () => {
+            if (pendingText.length === 0)
+                return;
+            const text = pendingText;
+            pendingText = '';
+            let node = { type: 'text', text: text };
+            const styleFrame = stack.find(f => f.type === 'style');
+            if (styleFrame && styleFrame.type === 'style') {
+                node = {
+                    type: 'styled',
+                    attrs: styleFrame.attrs,
+                    children: [node]
+                };
+            }
+            const urlFrame = stack.find(f => f.type === 'url');
+            if (urlFrame && urlFrame.type === 'url') {
+                if (!urlFrame.children) {
+                    urlFrame.children = [];
+                }
+                urlFrame.children.push(node);
+            }
+            else {
+                rootNodes.push(node);
+            }
+        };
+        const updateStyleStack = () => {
+            stack.splice(0, stack.length, ...stack.filter(f => f.type !== 'style'));
+            if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
+                stack.push({
+                    type: 'style',
+                    attrs: {
+                        bold: this.bold,
+                        faint: this.faint,
+                        italic: this.italic,
+                        underline: this.underline,
+                        fg: this.fg,
+                        bg: this.bg,
+                        text: ''
+                    }
+                });
+            }
+        };
+        const closeUrlFrame = () => {
+            const urlIndex = stack.findIndex(f => f.type === 'url');
+            if (urlIndex !== -1) {
+                const urlFrame = stack[urlIndex];
+                if (urlFrame.type === 'url') {
+                    const linkNode = {
+                        type: 'link',
+                        url: urlFrame.url,
+                        children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
+                    };
+                    rootNodes.push(linkNode);
+                    stack.splice(urlIndex, 1);
+                }
+            }
+            this.url = false;
+        };
         while (true) {
-            var packet = this.get_next_packet();
-            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete)
+            const packet = this.get_next_packet();
+            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
+                flushText();
+                stack.length = 0;
+                this.url = false;
                 break;
+            }
             if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown)
                 continue;
             if (packet.kind === PacketKind.Text) {
-                blocks.push(this.transform_to_html(this.with_state(packet)));
+                pendingText += packet.text;
             }
             else if (packet.kind === PacketKind.SGR) {
+                flushText();
                 this.process_ansi(packet);
+                updateStyleStack();
             }
-            else if (packet.kind === PacketKind.OSCURL || packet.kind === PacketKind.OSCURLEND) {
-                blocks.push(this.hyperlink_to_html(packet));
+            else if (packet.kind === PacketKind.OSCURL) {
+                flushText();
+                let parts = packet.text.split(':');
+                if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
+                    stack.push({ type: 'url', url: packet.text, children: [] });
+                    this.url = true;
+                }
+            }
+            else if (packet.kind === PacketKind.OSCURLEND) {
+                flushText();
+                closeUrlFrame();
             }
         }
-        blocks.push(this.hyperlink_to_html({ kind: PacketKind.OSCURLEND, text: '' }));
-        return blocks.join("");
+        return rootNodes;
     }
-    with_state(pkt) {
-        return { bold: this.bold, faint: this.faint, italic: this.italic, underline: this.underline, fg: this.fg, bg: this.bg, text: pkt.text };
+    render_nodes_to_html(nodes) {
+        return nodes.map(node => this.render_node_to_html(node)).join('');
+    }
+    render_node_to_html(node) {
+        if (node.type === 'text') {
+            return this.escape_txt_for_html(node.text);
+        }
+        else if (node.type === 'styled') {
+            return this.render_styled_node(node);
+        }
+        else if (node.type === 'link') {
+            const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
+            return `<a href="${this.escape_txt_for_html(node.url)}">${innerHtml}</a>`;
+        }
+        return '';
+    }
+    render_styled_node(node) {
+        const fragment = node.attrs;
+        const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
+        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline &&
+            fragment.fg === null && fragment.bg === null) {
+            return innerHtml;
+        }
+        let styles = [];
+        let classes = [];
+        if (fragment.bold)
+            styles.push(this._boldStyle);
+        if (fragment.faint)
+            styles.push(this._faintStyle);
+        if (fragment.italic)
+            styles.push(this._italicStyle);
+        if (fragment.underline)
+            styles.push(this._underlineStyle);
+        if (!this._use_classes) {
+            if (fragment.fg)
+                styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
+            if (fragment.bg)
+                styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
+        }
+        else {
+            if (fragment.fg) {
+                if (fragment.fg.class_name !== 'truecolor') {
+                    classes.push(`${fragment.fg.class_name}-fg`);
+                }
+                else {
+                    styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
+                }
+            }
+            if (fragment.bg) {
+                if (fragment.bg.class_name !== 'truecolor') {
+                    classes.push(`${fragment.bg.class_name}-bg`);
+                }
+                else {
+                    styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
+                }
+            }
+        }
+        let class_string = '';
+        let style_string = '';
+        if (classes.length)
+            class_string = ` class="${classes.join(' ')}"`;
+        if (styles.length)
+            style_string = ` style="${styles.join(';')}"`;
+        return `<span${style_string}${class_string}>${innerHtml}</span>`;
     }
     process_ansi(pkt) {
         let sgr_cmds = pkt.text.split(';');
@@ -341,76 +481,6 @@ export class AnsiUp {
                 }
             }
         }
-    }
-    transform_to_html(fragment) {
-        let txt = fragment.text;
-        if (txt.length === 0)
-            return txt;
-        txt = this.escape_txt_for_html(txt);
-        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline && fragment.fg === null && fragment.bg === null)
-            return txt;
-        let styles = [];
-        let classes = [];
-        let fg = fragment.fg;
-        let bg = fragment.bg;
-        if (fragment.bold)
-            styles.push(this._boldStyle);
-        if (fragment.faint)
-            styles.push(this._faintStyle);
-        if (fragment.italic)
-            styles.push(this._italicStyle);
-        if (fragment.underline)
-            styles.push(this._underlineStyle);
-        if (!this._use_classes) {
-            if (fg)
-                styles.push(`color:rgb(${fg.rgb.join(',')})`);
-            if (bg)
-                styles.push(`background-color:rgb(${bg.rgb})`);
-        }
-        else {
-            if (fg) {
-                if (fg.class_name !== 'truecolor') {
-                    classes.push(`${fg.class_name}-fg`);
-                }
-                else {
-                    styles.push(`color:rgb(${fg.rgb.join(',')})`);
-                }
-            }
-            if (bg) {
-                if (bg.class_name !== 'truecolor') {
-                    classes.push(`${bg.class_name}-bg`);
-                }
-                else {
-                    styles.push(`background-color:rgb(${bg.rgb.join(',')})`);
-                }
-            }
-        }
-        let class_string = '';
-        let style_string = '';
-        if (classes.length)
-            class_string = ` class="${classes.join(' ')}"`;
-        if (styles.length)
-            style_string = ` style="${styles.join(';')}"`;
-        return `<span${style_string}${class_string}>${txt}</span>`;
-    }
-    ;
-    hyperlink_to_html(pkt) {
-        let result = '';
-        if (this.url)
-            result += '</a>';
-        if (pkt.kind === PacketKind.OSCURL) {
-            let parts = pkt.text.split(':');
-            if (parts.length < 1)
-                return '';
-            if (!this._url_allowlist[parts[0]])
-                return '';
-            result += `<a href="${this.escape_txt_for_html(pkt.text)}">`;
-            this.url = true;
-        }
-        else if (pkt.kind === PacketKind.OSCURLEND) {
-            this.url = false;
-        }
-        return result;
     }
 }
 function rgx(tmplObj, ...subst) {

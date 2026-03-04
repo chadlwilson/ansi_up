@@ -47,6 +47,12 @@ interface TextPacket {
     text:string;
 }
 
+// Render nodes - simple types that can represent formatted output
+type RenderNode =
+    | { type: 'text', text: string }
+    | { type: 'styled', attrs: TextWithAttr, children: RenderNode[] }
+    | { type: 'link', url: string, children: RenderNode[] };
+
 //
 // MAIN CLASS
 //
@@ -526,38 +532,206 @@ export class AnsiUp
     }
 
     ansi_to_html(txt:string):string {
+        const nodes = this.ansi_to_structured(txt);
+        return this.render_nodes_to_html(nodes);
+    }
 
+    // Convert ANSI text to a structured tree representation
+    // Returns an array of nodes that can be rendered to any format
+    ansi_to_structured(txt:string): RenderNode[] {
         this.append_buffer(txt);
 
-        var blocks:string[] = [];
+        const rootNodes: RenderNode[] = [];
+
+        // Stack frames track active contexts
+        type StackFrame =
+            | { type: 'style', attrs: TextWithAttr }
+            | { type: 'url', url: string, children: RenderNode[] };
+
+        const stack: StackFrame[] = [];
+        let pendingText = '';
+
+        // Helper: flush accumulated text with current stack context
+        const flushText = () => {
+            if (pendingText.length === 0) return;
+
+            const text = pendingText;
+            pendingText = '';
+
+            // Build node with current style
+            let node: RenderNode = { type: 'text' as const, text: text };
+
+            // Check if we have a style frame
+            const styleFrame = stack.find(f => f.type === 'style');
+            if (styleFrame && styleFrame.type === 'style') {
+                node = {
+                    type: 'styled' as const,
+                    attrs: styleFrame.attrs,
+                    children: [node]
+                };
+            }
+
+            // Check if we're inside a URL context
+            const urlFrame = stack.find(f => f.type === 'url');
+            if (urlFrame && urlFrame.type === 'url') {
+                // Add to URL's children
+                if (!urlFrame.children) {
+                    urlFrame.children = [];
+                }
+                urlFrame.children.push(node);
+            } else {
+                // Add directly to root
+                rootNodes.push(node);
+            }
+        };
+
+        // Helper: update style stack based on current formatting state
+        const updateStyleStack = () => {
+            // Remove existing style frames
+            stack.splice(0, stack.length, ...stack.filter(f => f.type !== 'style'));
+
+            // Add new style frame if we have active formatting
+            if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
+                stack.push({
+                    type: 'style' as const,
+                    attrs: {
+                        bold: this.bold,
+                        faint: this.faint,
+                        italic: this.italic,
+                        underline: this.underline,
+                        fg: this.fg,
+                        bg: this.bg,
+                        text: ''
+                    }
+                });
+            }
+        };
+
+        // Helper: close URL frame and emit link node
+        const closeUrlFrame = () => {
+            const urlIndex = stack.findIndex(f => f.type === 'url');
+            if (urlIndex !== -1) {
+                const urlFrame = stack[urlIndex];
+                if (urlFrame.type === 'url') {
+                    const linkNode: RenderNode = {
+                        type: 'link' as const,
+                        url: urlFrame.url,
+                        children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text' as const, text: '' }]
+                    };
+                    rootNodes.push(linkNode);
+                    stack.splice(urlIndex, 1);
+                }
+            }
+            this.url = false;
+        };
 
         while (true)
         {
-            var packet = this.get_next_packet();
+            const packet = this.get_next_packet();
 
-            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) break;
+            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
+                flushText();
+                // Close remaining contexts
+                stack.length = 0;
+                this.url = false;
+                break;
+            }
 
-            //Drop single ESC or Unknown CSI
+            // Drop single ESC or Unknown CSI
             if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown) continue;
 
             if (packet.kind === PacketKind.Text) {
-                blocks.push(this.transform_to_html(this.with_state(packet)));
+                pendingText += packet.text;
             } else
             if (packet.kind === PacketKind.SGR) {
+                flushText();
                 this.process_ansi(packet);
+                updateStyleStack();
             } else
-            if (packet.kind === PacketKind.OSCURL || packet.kind === PacketKind.OSCURLEND) {
-                blocks.push(this.hyperlink_to_html(packet));
+            if (packet.kind === PacketKind.OSCURL) {
+                flushText();
+                let parts = packet.text.split(':');
+                if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
+                    stack.push({ type: 'url' as const, url: packet.text, children: [] });
+                    this.url = true;
+                }
+            } else
+            if (packet.kind === PacketKind.OSCURLEND) {
+                flushText();
+                closeUrlFrame();
             }
         }
 
-        blocks.push(this.hyperlink_to_html({ kind: PacketKind.OSCURLEND, text: ''})); // Close any open URL at the end
-
-        return blocks.join("");
+        return rootNodes;
     }
 
-    private with_state(pkt:TextPacket):TextWithAttr {
-        return { bold: this.bold, faint: this.faint, italic: this.italic, underline: this.underline, fg: this.fg, bg: this.bg, text: pkt.text };
+    // Render structured nodes to HTML
+    private render_nodes_to_html(nodes: RenderNode[]): string {
+        return nodes.map(node => this.render_node_to_html(node)).join('');
+    }
+
+    private render_node_to_html(node: RenderNode): string {
+        if (node.type === 'text') {
+            return this.escape_txt_for_html(node.text);
+        } else if (node.type === 'styled') {
+            return this.render_styled_node(node);
+        } else if (node.type === 'link') {
+            const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
+            return `<a href="${this.escape_txt_for_html(node.url)}">${innerHtml}</a>`;
+        }
+        return '';
+    }
+
+    private render_styled_node(node: RenderNode & { type: 'styled' }): string {
+        const fragment = node.attrs;
+        const innerHtml = node.children.map(child => this.render_node_to_html(child)).join('');
+
+        // If no styling, just return the inner content
+        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline &&
+            fragment.fg === null && fragment.bg === null) {
+            return innerHtml;
+        }
+
+        let styles: string[] = [];
+        let classes: string[] = [];
+
+        if (fragment.bold)      styles.push(this._boldStyle);
+        if (fragment.faint)     styles.push(this._faintStyle);
+        if (fragment.italic)    styles.push(this._italicStyle);
+        if (fragment.underline) styles.push(this._underlineStyle);
+
+        if (!this._use_classes) {
+            if (fragment.fg)
+                styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
+            if (fragment.bg)
+                styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
+        } else {
+            if (fragment.fg) {
+                if (fragment.fg.class_name !== 'truecolor') {
+                    classes.push(`${fragment.fg.class_name}-fg`);
+                } else {
+                    styles.push(`color:rgb(${fragment.fg.rgb.join(',')})`);
+                }
+            }
+            if (fragment.bg) {
+                if (fragment.bg.class_name !== 'truecolor') {
+                    classes.push(`${fragment.bg.class_name}-bg`);
+                } else {
+                    styles.push(`background-color:rgb(${fragment.bg.rgb.join(',')})`);
+                }
+            }
+        }
+
+        let class_string = '';
+        let style_string = '';
+
+        if (classes.length)
+            class_string = ` class="${classes.join(' ')}"`;
+
+        if (styles.length)
+            style_string = ` style="${styles.join(';')}"`;
+
+        return `<span${style_string}${class_string}>${innerHtml}</span>`;
     }
 
     private process_ansi(pkt:TextPacket)
@@ -641,91 +815,6 @@ export class AnsiUp
               }
           }
       }
-    }
-
-    private transform_to_html(fragment:TextWithAttr):string {
-        let txt = fragment.text;
-
-        if (txt.length === 0)
-            return txt;
-
-        txt = this.escape_txt_for_html(txt);
-
-        // If colors not set, default style is used
-        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline && fragment.fg === null && fragment.bg === null)
-            return txt;
-
-        let styles:string[] = [];
-        let classes:string[] = [];
-
-        let fg = fragment.fg;
-        let bg = fragment.bg;
-
-        // Note on bold: https://stackoverflow.com/questions/6737005/what-are-some-advantages-to-using-span-style-font-weightbold-rather-than-b?rq=1
-        if (fragment.bold)      styles.push(this._boldStyle);
-        if (fragment.faint)     styles.push(this._faintStyle);
-        if (fragment.italic)    styles.push(this._italicStyle);
-        if (fragment.underline) styles.push(this._underlineStyle);
-
-        if (!this._use_classes) {
-            // USE INLINE STYLES
-            if (fg)
-                styles.push(`color:rgb(${fg.rgb.join(',')})`);
-            if (bg)
-                styles.push(`background-color:rgb(${bg.rgb})`);
-        } else {
-            // USE CLASSES
-            if (fg) {
-                if (fg.class_name !== 'truecolor') {
-                    classes.push(`${fg.class_name}-fg`);
-                } else {
-                    styles.push(`color:rgb(${fg.rgb.join(',')})`);
-                }
-            }
-            if (bg) {
-                if (bg.class_name !== 'truecolor') {
-                    classes.push(`${bg.class_name}-bg`);
-                } else {
-                    styles.push(`background-color:rgb(${bg.rgb.join(',')})`);
-                }
-            }
-        }
-
-        let class_string = '';
-        let style_string = '';
-
-        if (classes.length)
-            class_string = ` class="${classes.join(' ')}"`;
-
-        if (styles.length)
-            style_string = ` style="${styles.join(';')}"`;
-
-        return `<span${style_string}${class_string}>${txt}</span>`;
-    };
-
-    private hyperlink_to_html(pkt:TextPacket):string
-    {
-        let result = '';
-
-        // Always close an existing URL if it has been opened
-        if (this.url) result += '</a>';
-
-        if (pkt.kind === PacketKind.OSCURL) {
-            // Check URL scheme
-            let parts = pkt.text.split(':');
-            if (parts.length < 1)
-                return '';
-
-            if (!this._url_allowlist[parts[0]])
-                return '';
-
-            result += `<a href="${this.escape_txt_for_html(pkt.text)}">`
-            this.url = true;
-        } else if (pkt.kind === PacketKind.OSCURLEND) {
-            this.url = false;
-        }
-
-        return result;
     }
 }
 
