@@ -241,68 +241,10 @@ export class AnsiUp {
         const rootNodes = [];
         const stack = [];
         let pendingText = '';
-        const flushText = () => {
-            if (pendingText.length === 0)
-                return;
-            const text = pendingText;
-            pendingText = '';
-            let node = { type: 'text', text: text };
-            const styleFrame = stack.find(f => f.type === 'style');
-            if (styleFrame && styleFrame.type === 'style') {
-                node = {
-                    type: 'styled',
-                    attrs: styleFrame.attrs,
-                    children: [node]
-                };
-            }
-            const urlFrame = stack.find(f => f.type === 'url');
-            if (urlFrame && urlFrame.type === 'url') {
-                if (!urlFrame.children) {
-                    urlFrame.children = [];
-                }
-                urlFrame.children.push(node);
-            }
-            else {
-                rootNodes.push(node);
-            }
-        };
-        const updateStyleStack = () => {
-            stack.splice(0, stack.length, ...stack.filter(f => f.type !== 'style'));
-            if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
-                stack.push({
-                    type: 'style',
-                    attrs: {
-                        bold: this.bold,
-                        faint: this.faint,
-                        italic: this.italic,
-                        underline: this.underline,
-                        fg: this.fg,
-                        bg: this.bg,
-                        text: ''
-                    }
-                });
-            }
-        };
-        const closeUrlFrame = () => {
-            const urlIndex = stack.findIndex(f => f.type === 'url');
-            if (urlIndex !== -1) {
-                const urlFrame = stack[urlIndex];
-                if (urlFrame.type === 'url') {
-                    const linkNode = {
-                        type: 'link',
-                        url: urlFrame.url,
-                        children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
-                    };
-                    rootNodes.push(linkNode);
-                    stack.splice(urlIndex, 1);
-                }
-            }
-            this.url = false;
-        };
         while (true) {
             const packet = this.get_next_packet();
             if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
-                flushText();
+                this.flush_text(pendingText, stack, rootNodes);
                 stack.length = 0;
                 this.url = false;
                 break;
@@ -313,12 +255,14 @@ export class AnsiUp {
                 pendingText += packet.text;
             }
             else if (packet.kind === PacketKind.SGR) {
-                flushText();
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
                 this.process_ansi(packet);
-                updateStyleStack();
+                this.update_style_stack(stack);
             }
             else if (packet.kind === PacketKind.OSCURL) {
-                flushText();
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
                 let parts = packet.text.split(':');
                 if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
                     stack.push({ type: 'url', url: packet.text, children: [] });
@@ -326,11 +270,66 @@ export class AnsiUp {
                 }
             }
             else if (packet.kind === PacketKind.OSCURLEND) {
-                flushText();
-                closeUrlFrame();
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
+                this.close_url_frame(stack, rootNodes);
             }
         }
         return rootNodes;
+    }
+    flush_text(pendingText, stack, rootNodes) {
+        if (pendingText.length === 0)
+            return;
+        let node = { type: 'text', text: pendingText };
+        const styleFrame = stack.find(f => f.type === 'style');
+        if (styleFrame && styleFrame.type === 'style') {
+            node = {
+                type: 'styled',
+                attrs: styleFrame.attrs,
+                children: [node]
+            };
+        }
+        const urlFrame = stack.find(f => f.type === 'url');
+        if (urlFrame && urlFrame.type === 'url') {
+            urlFrame.children.push(node);
+        }
+        else {
+            rootNodes.push(node);
+        }
+    }
+    update_style_stack(stack) {
+        const filtered = stack.filter(f => f.type !== 'style');
+        stack.splice(0, stack.length, ...filtered);
+        if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
+            stack.push({
+                type: 'style',
+                attrs: {
+                    bold: this.bold,
+                    faint: this.faint,
+                    italic: this.italic,
+                    underline: this.underline,
+                    fg: this.fg,
+                    bg: this.bg,
+                    text: ''
+                }
+            });
+        }
+    }
+    close_url_frame(stack, rootNodes) {
+        const urlIndex = stack.findIndex(f => f.type === 'url');
+        if (urlIndex !== -1) {
+            const urlFrame = stack[urlIndex];
+            if (urlFrame.type === 'url') {
+                const linkNode = {
+                    type: 'link',
+                    url: urlFrame.url,
+                    children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
+                };
+                rootNodes.push(linkNode);
+                stack.splice(urlIndex, 1);
+            }
+        }
+        this.url = false;
     }
     render_nodes_to_html(nodes) {
         return nodes.map(node => this.render_node_to_html(node)).join('');

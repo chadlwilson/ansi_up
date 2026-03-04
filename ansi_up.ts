@@ -551,87 +551,11 @@ export class AnsiUp
         const stack: StackFrame[] = [];
         let pendingText = '';
 
-        // Helper: flush accumulated text with current stack context
-        const flushText = () => {
-            if (pendingText.length === 0) return;
-
-            const text = pendingText;
-            pendingText = '';
-
-            // Build node with current style
-            let node: RenderNode = { type: 'text' as const, text: text };
-
-            // Check if we have a style frame
-            const styleFrame = stack.find(f => f.type === 'style');
-            if (styleFrame && styleFrame.type === 'style') {
-                node = {
-                    type: 'styled' as const,
-                    attrs: styleFrame.attrs,
-                    children: [node]
-                };
-            }
-
-            // Check if we're inside a URL context
-            const urlFrame = stack.find(f => f.type === 'url');
-            if (urlFrame && urlFrame.type === 'url') {
-                // Add to URL's children
-                if (!urlFrame.children) {
-                    urlFrame.children = [];
-                }
-                urlFrame.children.push(node);
-            } else {
-                // Add directly to root
-                rootNodes.push(node);
-            }
-        };
-
-        // Helper: update style stack based on current formatting state
-        const updateStyleStack = () => {
-            // Remove existing style frames
-            stack.splice(0, stack.length, ...stack.filter(f => f.type !== 'style'));
-
-            // Add new style frame if we have active formatting
-            if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
-                stack.push({
-                    type: 'style' as const,
-                    attrs: {
-                        bold: this.bold,
-                        faint: this.faint,
-                        italic: this.italic,
-                        underline: this.underline,
-                        fg: this.fg,
-                        bg: this.bg,
-                        text: ''
-                    }
-                });
-            }
-        };
-
-        // Helper: close URL frame and emit link node
-        const closeUrlFrame = () => {
-            const urlIndex = stack.findIndex(f => f.type === 'url');
-            if (urlIndex !== -1) {
-                const urlFrame = stack[urlIndex];
-                if (urlFrame.type === 'url') {
-                    const linkNode: RenderNode = {
-                        type: 'link' as const,
-                        url: urlFrame.url,
-                        children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text' as const, text: '' }]
-                    };
-                    rootNodes.push(linkNode);
-                    stack.splice(urlIndex, 1);
-                }
-            }
-            this.url = false;
-        };
-
-        while (true)
-        {
+        while (true) {
             const packet = this.get_next_packet();
 
             if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
-                flushText();
-                // Close remaining contexts
+                this.flush_text(pendingText, stack, rootNodes);
                 stack.length = 0;
                 this.url = false;
                 break;
@@ -642,27 +566,93 @@ export class AnsiUp
 
             if (packet.kind === PacketKind.Text) {
                 pendingText += packet.text;
-            } else
-            if (packet.kind === PacketKind.SGR) {
-                flushText();
+            } else if (packet.kind === PacketKind.SGR) {
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
                 this.process_ansi(packet);
-                updateStyleStack();
-            } else
-            if (packet.kind === PacketKind.OSCURL) {
-                flushText();
+                this.update_style_stack(stack);
+            } else if (packet.kind === PacketKind.OSCURL) {
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
                 let parts = packet.text.split(':');
                 if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
                     stack.push({ type: 'url' as const, url: packet.text, children: [] });
                     this.url = true;
                 }
-            } else
-            if (packet.kind === PacketKind.OSCURLEND) {
-                flushText();
-                closeUrlFrame();
+            } else if (packet.kind === PacketKind.OSCURLEND) {
+                this.flush_text(pendingText, stack, rootNodes);
+                pendingText = '';
+                this.close_url_frame(stack, rootNodes);
             }
         }
 
         return rootNodes;
+    }
+
+    // Flush accumulated pending text, wrapping with current style/URL context
+    private flush_text(pendingText: string, stack: any[], rootNodes: RenderNode[]): void {
+        if (pendingText.length === 0) return;
+
+        let node: RenderNode = { type: 'text' as const, text: pendingText };
+
+        // Check if we have a style frame
+        const styleFrame = stack.find(f => f.type === 'style');
+        if (styleFrame && styleFrame.type === 'style') {
+            node = {
+                type: 'styled' as const,
+                attrs: styleFrame.attrs,
+                children: [node]
+            };
+        }
+
+        // Check if we're inside a URL context
+        const urlFrame = stack.find(f => f.type === 'url');
+        if (urlFrame && urlFrame.type === 'url') {
+            urlFrame.children.push(node);
+        } else {
+            rootNodes.push(node);
+        }
+    }
+
+    // Update the style stack based on current formatting state
+    private update_style_stack(stack: any[]): void {
+        // Remove existing style frames
+        const filtered = stack.filter(f => f.type !== 'style');
+        stack.splice(0, stack.length, ...filtered);
+
+        // Add new style frame if we have active formatting
+        if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
+            stack.push({
+                type: 'style' as const,
+                attrs: {
+                    bold: this.bold,
+                    faint: this.faint,
+                    italic: this.italic,
+                    underline: this.underline,
+                    fg: this.fg,
+                    bg: this.bg,
+                    text: ''
+                }
+            });
+        }
+    }
+
+    // Close URL frame and emit link node
+    private close_url_frame(stack: any[], rootNodes: RenderNode[]): void {
+        const urlIndex = stack.findIndex(f => f.type === 'url');
+        if (urlIndex !== -1) {
+            const urlFrame = stack[urlIndex];
+            if (urlFrame.type === 'url') {
+                const linkNode: RenderNode = {
+                    type: 'link' as const,
+                    url: urlFrame.url,
+                    children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text' as const, text: '' }]
+                };
+                rootNodes.push(linkNode);
+                stack.splice(urlIndex, 1);
+            }
+        }
+        this.url = false;
     }
 
     // Render structured nodes to HTML

@@ -66,6 +66,9 @@ export declare class AnsiUp {
     private get_next_packet;
     ansi_to_html(txt: string): string;
     ansi_to_structured(txt: string): RenderNode[];
+    private flush_text;
+    private update_style_stack;
+    private close_url_frame;
     private render_nodes_to_html;
     private render_node_to_html;
     private render_styled_node;
