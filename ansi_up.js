@@ -161,7 +161,7 @@ export class AnsiUp {
                         (?:                         # legal sequence
                           \x1b\[                      # CSI
                           ([\x3c-\x3f]?)              # private-mode char
-                          ([\d;]*)                    # any digits or semicolons
+                          ([\d;:]*)                    # any digits or semicolons or colons
                           ([\x20-\x2f]?               # an intermediate modifier
                           [\x40-\x7e])                # the command
                         )
@@ -351,7 +351,7 @@ export class AnsiUp {
             const linkNode = {
                 type: 'link',
                 url: urlFrame.url,
-                children: urlFrame.children.length > 0 ? urlFrame.children : [{ type: 'text', text: '' }]
+                children: urlFrame.children.length === 0 ? [{ type: 'text', text: '' }] : urlFrame.children
             };
             rootNodes.push(linkNode);
             render_ctx_stack.splice(urlIndex, 1);
@@ -414,33 +414,39 @@ export class AnsiUp {
                 this.bg = this.ansi_colors[1][(num - 100)];
             }
             else if (num === 38 || num === 48) {
-                if (sgr_cmds.length > 0) {
-                    let is_foreground = (num === 38);
-                    let mode_cmd = sgr_cmds.shift();
-                    if (mode_cmd === '5' && sgr_cmds.length > 0) {
-                        let palette_index = parseInt(sgr_cmds.shift(), 10);
-                        if (palette_index >= 0 && palette_index <= 255) {
-                            if (is_foreground)
-                                this.fg = this.palette_256[palette_index];
-                            else
-                                this.bg = this.palette_256[palette_index];
-                        }
-                    }
-                    if (mode_cmd === '2' && sgr_cmds.length > 2) {
-                        let r = parseInt(sgr_cmds.shift(), 10);
-                        let g = parseInt(sgr_cmds.shift(), 10);
-                        let b = parseInt(sgr_cmds.shift(), 10);
-                        if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
-                            let c = { rgb: [r, g, b], class_name: 'truecolor' };
-                            if (is_foreground)
-                                this.fg = c;
-                            else
-                                this.bg = c;
-                        }
-                    }
+                let is_itu416 = sgr_cmd_str.charAt(2) === ':';
+                let params = is_itu416 ? sgr_cmd_str.split(':').slice(1) : sgr_cmds;
+                if (num === 38) {
+                    this.fg = this.get_rgb_color(params, is_itu416);
+                }
+                else {
+                    this.bg = this.get_rgb_color(params, is_itu416);
                 }
             }
         }
+    }
+    get_rgb_color(sgr_params, is_itu416) {
+        if (sgr_params.length === 0) {
+            return;
+        }
+        let color_mode = sgr_params.shift();
+        if (color_mode === '5') {
+            let palette_index = parseInt(sgr_params.shift(), 10);
+            if (palette_index >= 0 && palette_index <= 255) {
+                return this.palette_256[palette_index];
+            }
+        }
+        if (color_mode === '2' && sgr_params.length > 2) {
+            if (is_itu416 && sgr_params.length === 4)
+                sgr_params.shift();
+            let r = parseInt(sgr_params.shift(), 10);
+            let g = parseInt(sgr_params.shift(), 10);
+            let b = parseInt(sgr_params.shift(), 10);
+            if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
+                return { rgb: [r, g, b], class_name: 'truecolor' };
+            }
+        }
+        return null;
     }
     has_styling(val) {
         return val.bold || val.italic || val.faint || val.underline || val.fg !== null || val.bg !== null;

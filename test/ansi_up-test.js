@@ -629,6 +629,13 @@ describe('ansi_up', function () {
           var l = au.ansi_to_html(start);
           l.should.eql(expected);
         });
+        it('foreground with iso colon separators and colorspace (from Yarn Berry)', function () {
+          var start = "\x1b[0;38:2:1:215:95:0m" + "foo" + "\x1B[0m"
+          var expected = '<span style="color:rgb(215,95,0)">foo</span>';
+          var au = new AnsiUp();
+          var l = au.ansi_to_html(start);
+          l.should.eql(expected);
+        });
       });
     });
 

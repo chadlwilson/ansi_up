@@ -69,6 +69,7 @@ export declare class AnsiUp {
     private update_style_stack;
     private close_url_frame;
     private process_ansi;
+    private get_rgb_color;
     protected has_styling(val: TextWithAttr): boolean;
     private styled_node_to_html;
     protected attrs_to_styles_classes(fragment: TextWithAttr): {

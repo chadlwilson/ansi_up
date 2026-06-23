@@ -307,7 +307,7 @@ export class AnsiUp
                 //
                 // CONTROL-SEQUENCE-INTRODUCER CSI             (ESC, '[')
                 // PRIVATE-MODE-CHAR                           (!, <, >, ?)
-                // Numeric parameters separated by semicolons  ('0' - '9', ';')
+                // Numeric parameters separated by semicolons  ('0' - '9', ';', ':')
                 // Intermediate-modifiers                      (0x20 - 0x2f)
                 // COMMAND-CHAR                                (0x40 - 0x7e)
                 //
@@ -321,7 +321,7 @@ export class AnsiUp
                         (?:                         # legal sequence
                           \x1b\[                      # CSI
                           ([\x3c-\x3f]?)              # private-mode char
-                          ([\d;]*)                    # any digits or semicolons
+                          ([\d;:]*)                    # any digits or semicolons or colons
                           ([\x20-\x2f]?               # an intermediate modifier
                           [\x40-\x7e])                # the command
                         )
@@ -685,44 +685,52 @@ export class AnsiUp
           } else if ((num >= 100) && (num < 108)) { this.bg = this.ansi_colors[1][(num - 100)];
 
           } else if (num === 38 || num === 48) {
+              // extended set foreground/background color (38=fg, 48=bg)
 
-              // extended set foreground/background color
+              // ITU 416 will have colon-delimited params inside the command after the mode/number
+              let is_itu416 = sgr_cmd_str.charAt(2) === ':';
 
-              // validate that param exists
-              if (sgr_cmds.length > 0) {
-                  // extend color (38=fg, 48=bg)
-                  let is_foreground = (num === 38);
+              // Normal semi-colon delimited format will consume params from regular mutable sgr commands list we are iterating through
+              // ITU 416 we split the command and remove the mode we have detected already
+              let params = is_itu416 ? sgr_cmd_str.split(':').slice(1) : sgr_cmds;
 
-                  let mode_cmd = sgr_cmds.shift();
-
-                  // MODE '5' - 256 color palette
-                  if (mode_cmd === '5' && sgr_cmds.length > 0) {
-                      let palette_index = parseInt(sgr_cmds.shift(), 10);
-                      if (palette_index >= 0 && palette_index <= 255) {
-                          if (is_foreground)
-                              this.fg = this.palette_256[palette_index];
-                          else
-                              this.bg = this.palette_256[palette_index];
-                      }
-                  }
-
-                  // MODE '2' - True Color
-                  if (mode_cmd === '2' && sgr_cmds.length > 2) {
-                      let r = parseInt(sgr_cmds.shift(), 10);
-                      let g = parseInt(sgr_cmds.shift(), 10);
-                      let b = parseInt(sgr_cmds.shift(), 10);
-
-                      if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
-                          let c = { rgb: [r,g,b], class_name: 'truecolor'};
-                          if (is_foreground)
-                              this.fg = c;
-                          else
-                              this.bg = c;
-                      }
-                  }
+              if (num === 38) {
+                  this.fg = this.get_rgb_color(params, is_itu416);
+              } else {
+                  this.bg = this.get_rgb_color(params, is_itu416);
               }
           }
       }
+    }
+
+    private get_rgb_color(sgr_params: string[], is_itu416: boolean): AU_Color {
+        // validate that param exists
+        if (sgr_params.length === 0) {
+            return;
+        }
+
+        let color_mode = sgr_params.shift();
+
+        // MODE '5' - 256 color palette
+        if (color_mode === '5' && sgr_params.length > 0) {
+            let palette_index = parseInt(sgr_params.shift(), 10);
+            if (palette_index >= 0 && palette_index <= 255) {
+                return this.palette_256[palette_index];
+            }
+        }
+
+        // MODE '2' - True Color
+        if (color_mode === '2' && sgr_params.length > 2) {
+            if (is_itu416 && sgr_params.length === 4) sgr_params.shift(); // Ignore any colorspace param if there are four; in iso mode
+            let r = parseInt(sgr_params.shift(), 10);
+            let g = parseInt(sgr_params.shift(), 10);
+            let b = parseInt(sgr_params.shift(), 10);
+
+            if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
+                return {rgb: [r, g, b], class_name: 'truecolor'};
+            }
+        }
+        return null;
     }
 
     protected has_styling(val: TextWithAttr) {
