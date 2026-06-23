@@ -501,7 +501,10 @@ describe('ansi_up', function () {
         var bg = 42;
         var start = "\n\x1B[40m \x1B[49m\x1B[" + fg + ";" + bg + "m " + bg + " \x1B[39m foobar ";
 
-        var expected = "\n<span style=\"background-color:rgb(0,0,0)\"> </span><span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + bg + " </span><span style=\"background-color:rgb(0,187,0)\"> foobar </span>";
+        var expected =
+          "\n<span style=\"background-color:rgb(0,0,0)\"> </span>" +
+          "<span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + bg + " </span>" +
+          "<span style=\"background-color:rgb(0,187,0)\"> foobar </span>";
 
         var au = new AnsiUp();
         var l = au.ansi_to_html(start);
@@ -513,7 +516,10 @@ describe('ansi_up', function () {
         var bg = 42;
         var start = "\n\x1B[40m \x1B[49m\x1B[" + fg + ";" + bg + "m " + fg + " \x1B[49m foobar ";
 
-        var expected = "\n<span style=\"background-color:rgb(0,0,0)\"> </span><span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + fg + " </span><span style=\"color:rgb(255,255,255)\"> foobar </span>";
+        var expected =
+          "\n<span style=\"background-color:rgb(0,0,0)\"> </span>" +
+          "<span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + fg + " </span>" +
+          "<span style=\"color:rgb(255,255,255)\"> foobar </span>";
 
         var au = new AnsiUp();
         var l = au.ansi_to_html(start);
@@ -525,7 +531,10 @@ describe('ansi_up', function () {
         var bg = 42;
         var start = "\n\x1B[40m \x1B[49m\x1B[" + fg + ";" + bg + "m " + fg + ';' + bg + " \x1B[39;49m foobar ";
 
-        var expected = "\n<span style=\"background-color:rgb(0,0,0)\"> </span><span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + fg + ';' + bg + " </span> foobar ";
+        var expected =
+          "\n<span style=\"background-color:rgb(0,0,0)\"> </span>" +
+          "<span style=\"color:rgb(255,255,255);background-color:rgb(0,187,0)\"> " + fg + ';' + bg + " </span>" +
+          " foobar ";
 
         var au = new AnsiUp();
         var l = au.ansi_to_html(start);

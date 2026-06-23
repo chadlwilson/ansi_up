@@ -1,22 +1,22 @@
 {
   "name": "ansi_up",
-  "version": "6.0.6",
+  "version": "6.1.0-gocd",
   "description": "Convert ansi sequences in strings to colorful HTML",
   "keywords": [
     "ansi",
     "html"
   ],
-  "author": "drudru <drudru@gmail.com>",
+  "author": "GoCD Community",
   "license": "MIT",
   "main": "./ansi_up.js",
   "type": "module",
   "types": "./ansi_up.d.ts",
   "repository": {
     "type": "git",
-    "url": "git://github.com/drudru/ansi_up.git"
+    "url": "git://github.com/gocd-contrib/ansi_up.git"
   },
   "bugs": {
-    "url": "http://github.com/drudru/ansi_up/issues"
+    "url": "https://github.com/gocd-contrib/ansi_up/issues"
   },
   "engines": {
     "node": "*"
@@ -26,8 +26,7 @@
     "build": "make typescript"
   },
   "devDependencies": {
-    "mocha": "^10.2.0",
-    "npm": "^9.8.1",
+    "mocha": "^11.7.6",
     "should": "*",
     "typescript": "^5.1.0"
   }

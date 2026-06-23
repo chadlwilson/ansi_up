@@ -68,10 +68,15 @@ export declare class AnsiUp {
     private flush_text;
     private update_style_stack;
     private close_url_frame;
+    private process_ansi;
+    protected has_styling(val: TextWithAttr): boolean;
+    private styled_node_to_html;
+    protected attrs_to_styles_classes(fragment: TextWithAttr): {
+        styles: string[];
+        classes: string[];
+    };
     private render_nodes_to_html;
     private render_node_to_html;
-    private process_ansi;
-    private styled_node_to_html;
     private hyperlink_to_html;
 }
 export {};

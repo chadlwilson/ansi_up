@@ -1,8 +1,4 @@
 "use strict";
-var __makeTemplateObject = (this && this.__makeTemplateObject) || function (cooked, raw) {
-    if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
-    return cooked;
-};
 var PacketKind;
 (function (PacketKind) {
     PacketKind[PacketKind["EOS"] = 0] = "EOS";
@@ -16,7 +12,7 @@ var PacketKind;
 })(PacketKind || (PacketKind = {}));
 export class AnsiUp {
     constructor() {
-        this.VERSION = "6.0.6";
+        this.VERSION = "6.1.0-gocd";
         this.setup_palettes();
         this._use_classes = false;
         this.bold = false;
@@ -158,7 +154,24 @@ export class AnsiUp {
             }
             if (next_char == '[') {
                 if (!this._csi_regex) {
-                    this._csi_regex = rgx(templateObject_1 || (templateObject_1 = __makeTemplateObject(["\n                        ^                           # beginning of line\n                                                    #\n                                                    # First attempt\n                        (?:                         # legal sequence\n                          \u001B[                      # CSI\n                          ([<-?]?)              # private-mode char\n                          ([d;]*)                    # any digits or semicolons\n                          ([ -/]?               # an intermediate modifier\n                          [@-~])                # the command\n                        )\n                        |                           # alternate (second attempt)\n                        (?:                         # illegal sequence\n                          \u001B[                      # CSI\n                          [ -~]*                # anything legal\n                          ([\0-\u001F:])              # anything illegal\n                        )\n                    "], ["\n                        ^                           # beginning of line\n                                                    #\n                                                    # First attempt\n                        (?:                         # legal sequence\n                          \\x1b\\[                      # CSI\n                          ([\\x3c-\\x3f]?)              # private-mode char\n                          ([\\d;]*)                    # any digits or semicolons\n                          ([\\x20-\\x2f]?               # an intermediate modifier\n                          [\\x40-\\x7e])                # the command\n                        )\n                        |                           # alternate (second attempt)\n                        (?:                         # illegal sequence\n                          \\x1b\\[                      # CSI\n                          [\\x20-\\x7e]*                # anything legal\n                          ([\\x00-\\x1f:])              # anything illegal\n                        )\n                    "])));
+                    this._csi_regex = rgx `
+                        ^                           # beginning of line
+                                                    #
+                                                    # First attempt
+                        (?:                         # legal sequence
+                          \x1b\[                      # CSI
+                          ([\x3c-\x3f]?)              # private-mode char
+                          ([\d;]*)                    # any digits or semicolons
+                          ([\x20-\x2f]?               # an intermediate modifier
+                          [\x40-\x7e])                # the command
+                        )
+                        |                           # alternate (second attempt)
+                        (?:                         # illegal sequence
+                          \x1b\[                      # CSI
+                          [\x20-\x7e]*                # anything legal
+                          ([\x00-\x1f:])              # anything illegal
+                        )
+                    `;
                 }
                 let match = this._buffer.match(this._csi_regex);
                 if (match === null) {
@@ -193,7 +206,21 @@ export class AnsiUp {
                     return pkt;
                 }
                 if (!this._osc_st) {
-                    this._osc_st = rgxG(templateObject_2 || (templateObject_2 = __makeTemplateObject(["\n                        (?:                         # legal sequence\n                          (\u001B\\)                    # ESC                           |                           # alternate\n                          (\u0007)                      # BEL (what xterm did)\n                        )\n                        |                           # alternate (second attempt)\n                        (                           # illegal sequence\n                          [\0-\u0006]                 # anything illegal\n                          |                           # alternate\n                          [\b-\u001A]                 # anything illegal\n                          |                           # alternate\n                          [\u001C-\u001F]                 # anything illegal\n                        )\n                    "], ["\n                        (?:                         # legal sequence\n                          (\\x1b\\\\)                    # ESC \\\n                          |                           # alternate\n                          (\\x07)                      # BEL (what xterm did)\n                        )\n                        |                           # alternate (second attempt)\n                        (                           # illegal sequence\n                          [\\x00-\\x06]                 # anything illegal\n                          |                           # alternate\n                          [\\x08-\\x1a]                 # anything illegal\n                          |                           # alternate\n                          [\\x1c-\\x1f]                 # anything illegal\n                        )\n                    "])));
+                    this._osc_st = rgxG `
+                        (?:                         # legal sequence
+                          (\x1b\\)                    # ESC \
+                          |                           # alternate
+                          (\x07)                      # BEL (what xterm did)
+                        )
+                        |                           # alternate (second attempt)
+                        (                           # illegal sequence
+                          [\x00-\x06]                 # anything illegal
+                          |                           # alternate
+                          [\x08-\x1a]                 # anything illegal
+                          |                           # alternate
+                          [\x1c-\x1f]                 # anything illegal
+                        )
+                    `;
                 }
                 this._osc_st.lastIndex = 0;
                 {
@@ -210,7 +237,19 @@ export class AnsiUp {
                     }
                 }
                 if (!this._osc_regex) {
-                    this._osc_regex = rgx(templateObject_3 || (templateObject_3 = __makeTemplateObject(["\n                        ^                           # beginning of line\n                                                    #\n                        \u001B]8;                    # OSC Hyperlink\n                        [ -:<-~]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([!-~]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\u001B\\)                  # ESC                           |                           # alternate\n                          (?:\u0007)                    # BEL (what xterm did)\n                        )\n                    "], ["\n                        ^                           # beginning of line\n                                                    #\n                        \\x1b\\]8;                    # OSC Hyperlink\n                        [\\x20-\\x3a\\x3c-\\x7e]*       # params (excluding ;)\n                        ;                           # end of params\n                        ([\\x21-\\x7e]{0,512})        # URL capture\n                        (?:                         # ST\n                          (?:\\x1b\\\\)                  # ESC \\\n                          |                           # alternate\n                          (?:\\x07)                    # BEL (what xterm did)\n                        )\n                    "])));
+                    this._osc_regex = rgx `
+                        ^                           # beginning of line
+                                                    #
+                        \x1b\]8;                    # OSC Hyperlink
+                        [\x20-\x3a\x3c-\x7e]*       # params (excluding ;)
+                        ;                           # end of params
+                        ([\x21-\x7e]{0,512})        # URL capture
+                        (?:                         # ST
+                          (?:\x1b\\)                  # ESC \
+                          |                           # alternate
+                          (?:\x07)                    # BEL (what xterm did)
+                        )
+                    `;
                 }
                 let match = this._buffer.match(this._osc_regex);
                 if (match === null) {
@@ -239,12 +278,11 @@ export class AnsiUp {
     ansi_to_structured(txt) {
         this.append_buffer(txt);
         const rootNodes = [];
-        const stack = [];
+        const renderCtx = [];
         let pendingText = '';
         while (true) {
             const packet = this.get_next_packet();
             if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
-                this.flush_text(pendingText, stack, rootNodes);
                 break;
             }
             if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown)
@@ -253,26 +291,27 @@ export class AnsiUp {
                 pendingText += packet.text;
             }
             else if (packet.kind === PacketKind.SGR) {
-                this.flush_text(pendingText, stack, rootNodes);
+                this.flush_text(pendingText, renderCtx, rootNodes);
                 pendingText = '';
                 this.process_ansi(packet);
-                this.update_style_stack(stack);
+                this.update_style_stack(renderCtx);
             }
             else if (packet.kind === PacketKind.OSCURL) {
-                this.flush_text(pendingText, stack, rootNodes);
+                this.flush_text(pendingText, renderCtx, rootNodes);
                 pendingText = '';
                 let parts = packet.text.split(':');
                 if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
-                    stack.push({ type: 'url', url: packet.text, children: [] });
+                    renderCtx.push({ type: 'url', url: packet.text, children: [] });
                 }
             }
             else if (packet.kind === PacketKind.OSCURLEND) {
-                this.flush_text(pendingText, stack, rootNodes);
+                this.flush_text(pendingText, renderCtx, rootNodes);
                 pendingText = '';
-                this.close_url_frame(stack, rootNodes);
+                this.close_url_frame(renderCtx, rootNodes);
             }
         }
-        this.close_url_frame(stack, rootNodes);
+        this.flush_text(pendingText, renderCtx, rootNodes);
+        this.close_url_frame(renderCtx, rootNodes);
         return rootNodes;
     }
     flush_text(pendingText, render_ctx_stack, rootNodes) {
@@ -301,15 +340,7 @@ export class AnsiUp {
         if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
             render_ctx_stack.push({
                 type: 'style',
-                attrs: {
-                    bold: this.bold,
-                    faint: this.faint,
-                    italic: this.italic,
-                    underline: this.underline,
-                    fg: this.fg,
-                    bg: this.bg,
-                    text: ''
-                }
+                attrs: { bold: this.bold, faint: this.faint, italic: this.italic, underline: this.underline, fg: this.fg, bg: this.bg, text: '' }
             });
         }
     }
@@ -325,21 +356,6 @@ export class AnsiUp {
             rootNodes.push(linkNode);
             render_ctx_stack.splice(urlIndex, 1);
         }
-    }
-    render_nodes_to_html(nodes) {
-        return nodes.map(node => this.render_node_to_html(node)).join('');
-    }
-    render_node_to_html(node) {
-        if (node.type === 'text') {
-            return this.escape_txt_for_html(node.text);
-        }
-        else if (node.type === 'styled') {
-            return this.styled_node_to_html(node);
-        }
-        else if (node.type === 'link') {
-            return this.hyperlink_to_html(node);
-        }
-        return '';
     }
     process_ansi(pkt) {
         let sgr_cmds = pkt.text.split(';');
@@ -426,12 +442,19 @@ export class AnsiUp {
             }
         }
     }
+    has_styling(val) {
+        return val.bold || val.italic || val.faint || val.underline || val.fg !== null || val.bg !== null;
+    }
     styled_node_to_html(node) {
-        const fragment = node.attrs;
-        const innerHtml = this.render_nodes_to_html(node.children);
-        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline && fragment.fg === null && fragment.bg === null) {
-            return innerHtml;
+        if (!this.has_styling(node.attrs)) {
+            return this.render_nodes_to_html(node.children);
         }
+        let { styles, classes } = this.attrs_to_styles_classes(node.attrs);
+        const class_string = !classes.length ? '' : ` class="${classes.join(' ')}"`;
+        const style_string = !styles.length ? '' : ` style="${styles.join(';')}"`;
+        return `<span${style_string}${class_string}>${(this.render_nodes_to_html(node.children))}</span>`;
+    }
+    attrs_to_styles_classes(fragment) {
         let styles = [];
         let classes = [];
         let fg = fragment.fg;
@@ -468,13 +491,22 @@ export class AnsiUp {
                 }
             }
         }
-        let class_string = '';
-        let style_string = '';
-        if (classes.length)
-            class_string = ` class="${classes.join(' ')}"`;
-        if (styles.length)
-            style_string = ` style="${styles.join(';')}"`;
-        return `<span${style_string}${class_string}>${innerHtml}</span>`;
+        return { styles, classes };
+    }
+    render_nodes_to_html(nodes) {
+        return nodes.map(node => this.render_node_to_html(node)).join('');
+    }
+    render_node_to_html(node) {
+        if (node.type === 'text') {
+            return this.escape_txt_for_html(node.text);
+        }
+        else if (node.type === 'styled') {
+            return this.styled_node_to_html(node);
+        }
+        else if (node.type === 'link') {
+            return this.hyperlink_to_html(node);
+        }
+        return '';
     }
     hyperlink_to_html(node) {
         return `<a href="${this.escape_txt_for_html(node.url)}">${this.render_nodes_to_html(node.children)}</a>`;
@@ -492,4 +524,3 @@ function rgxG(tmplObj, ...subst) {
     let txt2 = regexText.replace(wsrgx, '');
     return new RegExp(txt2, 'g');
 }
-var templateObject_1, templateObject_2, templateObject_3;

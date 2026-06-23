@@ -19,7 +19,7 @@ For example, turn this terminal output:
 
 ...into this browser output:
 
-![](https://raw.github.com/drudru/ansi_up/master/sample.png)
+![](https://raw.github.com/gocd-contrib/ansi_up/master/sample.png)
 
 
 ## Browser Example
@@ -28,7 +28,7 @@ For example, turn this terminal output:
 
     <script type="module" type="text/javascript">
 
-    var txt  = "\n\n\033[1;33;40m 33;40  \033[1;33;41m 33;41  \033[1;33;42m 33;42  \033[1;33;43m 33;43  \033[1;33;44m 33;44  \033[1;33;45m 33;45  \033[1;33;46m 33;46  \033[1m\033[0\n\n\033[1;33;42m >> Tests OK\n\n"
+    var txt  = "\n\n\033[1;33;40m 33;40  \033[1;33;41m 33;41  \033[1;33;42m 33;42  \033[1;33;43m 33;43  \033[1;33;44m 33;44  \033[1;33;45m 33;45  \033[1;33;46m 33;46  \033[1m\033[0m\n\n\033[1;33;42m >> Tests OK\n\n"
 
     import { AnsiUp } from './ansi_up.js'
     var ansi_up = new AnsiUp();
@@ -48,7 +48,7 @@ For example, turn this terminal output:
     import { AnsiUp } from './ansi_up.js'
     var ansi_up = new AnsiUp();
 
-    var txt  = "\n\n\033[1;33;40m 33;40  \033[1;33;41m 33;41  \033[1;33;42m 33;42  \033[1;33;43m 33;43  \033[1;33;44m 33;44  \033[1;33;45m 33;45  \033[1;33;46m 33;46  \033[1m\033[0\n\n\033[1;33;42m >> Tests OK\n\n"
+    var txt  = "\n\n\033[1;33;40m 33;40  \033[1;33;41m 33;41  \033[1;33;42m 33;42  \033[1;33;43m 33;43  \033[1;33;44m 33;44  \033[1;33;45m 33;45  \033[1;33;46m 33;46  \033[1m\033[0m\n\n\033[1;33;42m >> Tests OK\n\n"
 
     var html = ansi_up.ansi_to_html(txt);
 ```
@@ -61,7 +61,7 @@ More examples are in the 'examples' directory in the repo.
     import { AnsiUp } from './ansi_up.js'
     const ansi_up = new AnsiUp();
 
-    const txt  = "\n\n\x1B[1;33;40m 33;40  \x1B[1;33;41m 33;41  \x1B[1;33;42m 33;42  \x1B[1;33;43m 33;43  \x1B[1;33;44m 33;44  \x1B[1;33;45m 33;45  \x1B[1;33;46m 33;46  \x1B[1m\x1B[0\n\n\x1B[1;33;42m >> Tests OK\n\n"
+    const txt  = "\n\n\x1B[1;33;40m 33;40  \x1B[1;33;41m 33;41  \x1B[1;33;42m 33;42  \x1B[1;33;43m 33;43  \x1B[1;33;44m 33;44  \x1B[1;33;45m 33;45  \x1B[1;33;46m 33;46  \x1B[1m\x1B[0m\n\n\x1B[1;33;42m >> Tests OK\n\n"
 
     let html = ansi_up.ansi_to_html(txt);
 ```
