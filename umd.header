@@ -1,7 +1,7 @@
 /*  ansi_up.js
- *  author : http://github.com/drudru/ansi_up
+ *  author : http://github.com/gocd-contrib/ansi_up
  *  license : MIT
- *  http://github.com/drudru/ansi_up
+ *  http://github.com/gocd-contrib/ansi_up
  */
 (function (root, factory) {
     if (typeof define === 'function' && define.amd) {

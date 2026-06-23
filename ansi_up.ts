@@ -1,7 +1,7 @@
 /* ansi_up.js
- * author : http://github.com/drudru/
+ * author : http://github.com/gocd-contrib/
  * license : MIT
- * http://github.com/drudru/ansi_up
+ * http://github.com/gocd-contrib/ansi_up
  */
 
 "use strict";
@@ -38,14 +38,25 @@ enum PacketKind {
     ESC,                // A single ESC char - random
     Unknown,            // A valid CSI but not an SGR code
     SGR,                // Select Graphic Rendition
-    OSCURL,             // Operating System Command
+    OSCURL,             // Operating System Command URL
+    OSCURLEND,          // Operating System Command URL end
 }
 
 interface TextPacket {
     kind:PacketKind;
     text:string;
-     url:string;
 }
+
+// Render nodes - simple types that can represent formatted output
+type RenderNode =
+    | { type: 'text', text: string }
+    | { type: 'styled', attrs: TextWithAttr, children: RenderNode[] }
+    | { type: 'link', url: string, children: RenderNode[] };
+
+type RenderContextStyle = { type: 'style', attrs: TextWithAttr };
+type RenderContextLink = { type: 'url', url: string, children: RenderNode[] };
+type RenderContext = RenderContextStyle | RenderContextLink;
+
 
 //
 // MAIN CLASS
@@ -53,7 +64,7 @@ interface TextPacket {
 
 export class AnsiUp
 {
-    VERSION = "6.0.6";
+    VERSION = "6.1.0-gocd";
 
     //
     // *** SEE README ON GITHUB FOR PUBLIC API ***
@@ -233,8 +244,7 @@ export class AnsiUp
         var pkt =
             {
                 kind: PacketKind.EOS,
-                text: '',
-                 url: ''
+                text: ''
             } ;
 
         var len = this._buffer.length;
@@ -297,7 +307,7 @@ export class AnsiUp
                 //
                 // CONTROL-SEQUENCE-INTRODUCER CSI             (ESC, '[')
                 // PRIVATE-MODE-CHAR                           (!, <, >, ?)
-                // Numeric parameters separated by semicolons  ('0' - '9', ';')
+                // Numeric parameters separated by semicolons  ('0' - '9', ';', ':')
                 // Intermediate-modifiers                      (0x20 - 0x2f)
                 // COMMAND-CHAR                                (0x40 - 0x7e)
                 //
@@ -311,7 +321,7 @@ export class AnsiUp
                         (?:                         # legal sequence
                           \x1b\[                      # CSI
                           ([\x3c-\x3f]?)              # private-mode char
-                          ([\d;]*)                    # any digits or semicolons
+                          ([\d;:]*)                    # any digits or semicolons or colons
                           ([\x20-\x2f]?               # an intermediate modifier
                           [\x40-\x7e])                # the command
                         )
@@ -466,33 +476,7 @@ export class AnsiUp
                     }
                 }
 
-
-
-                // OK - we might have the prefix and URI
-                // Lets start our search for the next ST
-                // past this index
-
-                {
-                    let match = this._osc_st.exec( this._buffer );
-
-                    if (match === null)
-                    {
-                        pkt.kind = PacketKind.Incomplete;
-                        return pkt;
-                    }
-
-                    // If an illegal character was found, bail on the match
-                    if (match[3])
-                    {
-                        // Illegal sequence, just remove the ESC
-                        pkt.kind = PacketKind.ESC;
-                        pkt.text = this._buffer.slice(0, 1);
-                        this._buffer = this._buffer.slice(1);
-                        return pkt;
-                    }
-                }
-
-                // OK, at this point we should have a FULL match!
+                // OK, at this point we should have a match!
                 //
                 // Lets try to match that now
 
@@ -505,13 +489,6 @@ export class AnsiUp
                         [\x20-\x3a\x3c-\x7e]*       # params (excluding ;)
                         ;                           # end of params
                         ([\x21-\x7e]{0,512})        # URL capture
-                        (?:                         # ST
-                          (?:\x1b\\)                  # ESC \
-                          |                           # alternate
-                          (?:\x07)                    # BEL (what xterm did)
-                        )
-                        ([\x20-\x7e]+)              # TEXT capture
-                        \x1b\]8;;                   # OSC Hyperlink End
                         (?:                         # ST
                           (?:\x1b\\)                  # ESC \
                           |                           # alternate
@@ -534,12 +511,10 @@ export class AnsiUp
                 // match is an array
                 // 0 - total match
                 // 1 - URL
-                // 2 - Text
 
-                // If a valid SGR
-                pkt.kind = PacketKind.OSCURL;
-                pkt.url  = match[1];
-                pkt.text = match[2];
+                // If a valid OSC URL
+                pkt.kind = match[1] ? PacketKind.OSCURL : PacketKind.OSCURLEND;
+                pkt.text = match[1];
 
                 var rpos = match[0].length;
                 this._buffer = this._buffer.slice(rpos);
@@ -561,39 +536,110 @@ export class AnsiUp
     }
 
     ansi_to_html(txt:string):string {
-
-        this.append_buffer(txt);
-
-        var blocks:string[] = [];
-
-        while (true)
-        {
-            var packet = this.get_next_packet();
-
-            if (    (packet.kind == PacketKind.EOS)
-                 || (packet.kind == PacketKind.Incomplete)  )
-                break;
-
-            //Drop single ESC or Unknown CSI
-            if (    (packet.kind == PacketKind.ESC)
-                 || (packet.kind == PacketKind.Unknown)  )
-                continue;
-
-            if (packet.kind == PacketKind.Text)
-                blocks.push( this.transform_to_html(this.with_state(packet)) );
-            else
-            if (packet.kind == PacketKind.SGR)
-                this.process_ansi(packet);
-            else
-            if (packet.kind == PacketKind.OSCURL)
-                blocks.push( this.process_hyperlink(packet) );
-        }
-
-        return blocks.join("");
+        const nodes = this.ansi_to_structured(txt);
+        return this.render_nodes_to_html(nodes);
     }
 
-    private with_state(pkt:TextPacket):TextWithAttr {
-        return { bold: this.bold, faint: this.faint, italic: this.italic, underline: this.underline, fg: this.fg, bg: this.bg, text: pkt.text };
+    // Convert ANSI text to a structured tree representation
+    // Returns an array of nodes that can be rendered to any format
+    ansi_to_structured(txt: string): RenderNode[] {
+        this.append_buffer(txt);
+
+        const rootNodes: RenderNode[] = [];
+        const renderCtx: RenderContext[] = [];
+        let pendingText = '';
+
+        while (true) {
+            const packet = this.get_next_packet();
+
+            if (packet.kind === PacketKind.EOS || packet.kind === PacketKind.Incomplete) {
+                break;
+            }
+
+            // Drop single ESC or Unknown CSI
+            if (packet.kind === PacketKind.ESC || packet.kind === PacketKind.Unknown) continue;
+
+            if (packet.kind === PacketKind.Text) {
+                pendingText += packet.text;
+            } else if (packet.kind === PacketKind.SGR) {
+                this.flush_text(pendingText, renderCtx, rootNodes);
+                pendingText = '';
+                this.process_ansi(packet);
+                this.update_style_stack(renderCtx);
+            } else if (packet.kind === PacketKind.OSCURL) {
+                this.flush_text(pendingText, renderCtx, rootNodes);
+                pendingText = '';
+                let parts = packet.text.split(':');
+                if (parts.length >= 1 && this._url_allowlist[parts[0]]) {
+                    renderCtx.push({type: 'url', url: packet.text, children: []});
+                }
+            } else if (packet.kind === PacketKind.OSCURLEND) {
+                this.flush_text(pendingText, renderCtx, rootNodes);
+                pendingText = '';
+                this.close_url_frame(renderCtx, rootNodes);
+            }
+        }
+
+        // Ensure no unflushed text or dangling URLs
+        this.flush_text(pendingText, renderCtx, rootNodes);
+        this.close_url_frame(renderCtx, rootNodes);
+
+        return rootNodes;
+    }
+
+    // Flush accumulated pending text, wrapping with current style/URL context
+    private flush_text(pendingText: string, render_ctx_stack: RenderContext[], rootNodes: RenderNode[]): void {
+        if (pendingText.length === 0) return;
+
+        let node: RenderNode = { type: 'text', text: pendingText };
+
+        // Check if we have a style frame
+        const styleFrame = render_ctx_stack.find(f => f.type === 'style') as RenderContextStyle;
+        if (styleFrame) {
+            node = {
+                type: 'styled',
+                attrs: styleFrame.attrs,
+                children: [node]
+            };
+        }
+
+        // Check if we're inside a URL context
+        const urlFrame = render_ctx_stack.find(f => f.type === 'url') as RenderContextLink;
+        if (urlFrame) {
+            // We're in a URL context. Push the node (text or stylined text_ into the URL stack for later rendering
+            urlFrame.children.push(node);
+        } else {
+            rootNodes.push(node);
+        }
+    }
+
+    private update_style_stack(render_ctx_stack: RenderContext[]): void {
+        // Remove existing style frames
+        const filtered = render_ctx_stack.filter(f => f.type !== 'style');
+        render_ctx_stack.splice(0, render_ctx_stack.length, ...filtered);
+
+        // Add new style frame if we have active formatting
+        if (this.bold || this.faint || this.italic || this.underline || this.fg || this.bg) {
+            render_ctx_stack.push({
+                type: 'style',
+                attrs: { bold: this.bold, faint: this.faint, italic: this.italic, underline: this.underline, fg: this.fg, bg: this.bg, text: '' }
+            });
+        }
+    }
+
+    // Close URL frame and emit link node
+    private close_url_frame(render_ctx_stack: RenderContext[], rootNodes: RenderNode[]): void {
+        const urlIndex = render_ctx_stack.findIndex(f => f.type === 'url');
+        if (urlIndex !== -1) {
+            const urlFrame = render_ctx_stack[urlIndex] as RenderContextLink;
+            const linkNode: RenderNode = {
+                type: 'link',
+                url: urlFrame.url,
+                children: urlFrame.children.length === 0 ? [{type: 'text', text: ''}] : urlFrame.children
+            };
+            rootNodes.push(linkNode);
+            render_ctx_stack.splice(urlIndex, 1);
+        }
     }
 
     private process_ansi(pkt:TextPacket)
@@ -611,8 +657,8 @@ export class AnsiUp
           let sgr_cmd_str = sgr_cmds.shift();
           let num = parseInt(sgr_cmd_str, 10);
 
-      // TODO
-      // AT SOME POINT, JUST CONVERT TO A LOOKUP TABLE
+          // TODO
+          // AT SOME POINT, JUST CONVERT TO A LOOKUP TABLE
           if (isNaN(num) || num === 0) {
               this.fg        = null;
               this.bg        = null;
@@ -639,60 +685,74 @@ export class AnsiUp
           } else if ((num >= 100) && (num < 108)) { this.bg = this.ansi_colors[1][(num - 100)];
 
           } else if (num === 38 || num === 48) {
+              // extended set foreground/background color (38=fg, 48=bg)
 
-              // extended set foreground/background color
+              // ITU 416 will have colon-delimited params inside the command after the mode/number
+              let is_itu416 = sgr_cmd_str.charAt(2) === ':';
 
-              // validate that param exists
-              if (sgr_cmds.length > 0) {
-                  // extend color (38=fg, 48=bg)
-                  let is_foreground = (num === 38);
+              // Normal semi-colon delimited format will consume params from regular mutable sgr commands list we are iterating through
+              // ITU 416 we split the command and remove the mode we have detected already
+              let params = is_itu416 ? sgr_cmd_str.split(':').slice(1) : sgr_cmds;
 
-                  let mode_cmd = sgr_cmds.shift();
-
-                  // MODE '5' - 256 color palette
-                  if (mode_cmd === '5' && sgr_cmds.length > 0) {
-                      let palette_index = parseInt(sgr_cmds.shift(), 10);
-                      if (palette_index >= 0 && palette_index <= 255) {
-                          if (is_foreground)
-                              this.fg = this.palette_256[palette_index];
-                          else
-                              this.bg = this.palette_256[palette_index];
-                      }
-                  }
-
-                  // MODE '2' - True Color
-                  if (mode_cmd === '2' && sgr_cmds.length > 2) {
-                      let r = parseInt(sgr_cmds.shift(), 10);
-                      let g = parseInt(sgr_cmds.shift(), 10);
-                      let b = parseInt(sgr_cmds.shift(), 10);
-
-                      if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
-                          let c = { rgb: [r,g,b], class_name: 'truecolor'};
-                          if (is_foreground)
-                              this.fg = c;
-                          else
-                              this.bg = c;
-                      }
-                  }
+              if (num === 38) {
+                  this.fg = this.get_rgb_color(params, is_itu416);
+              } else {
+                  this.bg = this.get_rgb_color(params, is_itu416);
               }
           }
       }
     }
 
-    private transform_to_html(fragment:TextWithAttr):string {
-        let txt = fragment.text;
+    private get_rgb_color(sgr_params: string[], is_itu416: boolean): AU_Color {
+        // validate that param exists
+        if (sgr_params.length === 0) {
+            return;
+        }
 
-        if (txt.length === 0)
-            return txt;
+        let color_mode = sgr_params.shift();
 
-        txt = this.escape_txt_for_html(txt);
+        // MODE '5' - 256 color palette
+        if (color_mode === '5' && sgr_params.length > 0) {
+            let palette_index = parseInt(sgr_params.shift(), 10);
+            if (palette_index >= 0 && palette_index <= 255) {
+                return this.palette_256[palette_index];
+            }
+        }
 
-        // If colors not set, default style is used
-        if (!fragment.bold && !fragment.italic && !fragment.faint && !fragment.underline && fragment.fg === null && fragment.bg === null)
-            return txt;
+        // MODE '2' - True Color
+        if (color_mode === '2' && sgr_params.length > 2) {
+            if (is_itu416 && sgr_params.length === 4) sgr_params.shift(); // Ignore any colorspace param if there are four; in iso mode
+            let r = parseInt(sgr_params.shift(), 10);
+            let g = parseInt(sgr_params.shift(), 10);
+            let b = parseInt(sgr_params.shift(), 10);
 
-        let styles:string[] = [];
-        let classes:string[] = [];
+            if ((r >= 0 && r <= 255) && (g >= 0 && g <= 255) && (b >= 0 && b <= 255)) {
+                return {rgb: [r, g, b], class_name: 'truecolor'};
+            }
+        }
+        return null;
+    }
+
+    protected has_styling(val: TextWithAttr) {
+        return val.bold || val.italic || val.faint || val.underline || val.fg !== null || val.bg !== null;
+    }
+
+    private styled_node_to_html(node: RenderNode & { type: 'styled' }): string {
+        // If no styling, just return the inner content
+        if (!this.has_styling(node.attrs)) {
+            return this.render_nodes_to_html(node.children);
+        }
+
+        let {styles, classes} = this.attrs_to_styles_classes(node.attrs);
+
+        const class_string = !classes.length ? '' : ` class="${classes.join(' ')}"`;
+        const style_string = !styles.length ? '' : ` style="${styles.join(';')}"`;
+        return `<span${style_string}${class_string}>${(this.render_nodes_to_html(node.children))}</span>`;
+    }
+
+    protected attrs_to_styles_classes(fragment: TextWithAttr) {
+        let styles: string[] = [];
+        let classes: string[] = [];
 
         let fg = fragment.fg;
         let bg = fragment.bg;
@@ -708,7 +768,7 @@ export class AnsiUp
             if (fg)
                 styles.push(`color:rgb(${fg.rgb.join(',')})`);
             if (bg)
-                styles.push(`background-color:rgb(${bg.rgb})`);
+                styles.push(`background-color:rgb(${bg.rgb.join(',')})`);
         } else {
             // USE CLASSES
             if (fg) {
@@ -726,31 +786,27 @@ export class AnsiUp
                 }
             }
         }
+        return {styles, classes};
+    }
 
-        let class_string = '';
-        let style_string = '';
+    // Render structured nodes to HTML
+    private render_nodes_to_html(nodes: RenderNode[]): string {
+        return nodes.map(node => this.render_node_to_html(node)).join('');
+    }
 
-        if (classes.length)
-            class_string = ` class="${classes.join(' ')}"`;
+    private render_node_to_html(node: RenderNode): string {
+        if (node.type === 'text') {
+            return this.escape_txt_for_html(node.text);
+        } else if (node.type === 'styled') {
+            return this.styled_node_to_html(node);
+        } else if (node.type === 'link') {
+            return this.hyperlink_to_html(node);
+        }
+        return '';
+    }
 
-        if (styles.length)
-            style_string = ` style="${styles.join(';')}"`;
-
-        return `<span${style_string}${class_string}>${txt}</span>`;
-    };
-
-    private process_hyperlink(pkt:TextPacket):string
-    {
-        // Check URL scheme
-        let parts = pkt.url.split(':');
-        if (parts.length < 1)
-            return '';
-
-        if (! this._url_allowlist[parts[0]])
-            return '';
-
-        let result = `<a href="${this.escape_txt_for_html(pkt.url)}">${this.escape_txt_for_html(pkt.text)}</a>`;
-        return result;
+    private hyperlink_to_html(node: { type: "link"; url: string; children: RenderNode[] }) {
+        return `<a href="${this.escape_txt_for_html(node.url)}">${this.render_nodes_to_html(node.children)}</a>`;
     }
 }
 
